@@ -1,7 +1,7 @@
 name: terraform
 
-# Pull requests into main: fmt, validate and plan every stack.
-# Merge into main (protected branch, approved PR): fmt, validate, then apply dev -> staging -> prod.
+# Pull requests into main: fmt, validate and plan every environment.
+# Merge into main (protected branch, approved PR): fmt, validate, then apply dev -> stg -> prd.
 on:
   pull_request:
     branches: [main]
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        dir: [".", examples/multi-account]
+        dir: [".", examples/cluster1/dev, examples/cluster1/stg, examples/cluster1/prd]
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -54,23 +54,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { environment: dev, region: us-east-1 }
-          - { environment: staging, region: us-east-1 }
-          - { environment: staging, region: us-west-1 }
-          - { environment: prod, region: us-east-1 }
-          - { environment: prod, region: us-west-1 }
+        environment: [dev, stg, prd]
     # Unprotected environment holding the read-only plan role for this account.
     environment: ${{ matrix.environment }}-plan
     concurrency:
-      group: plan-${{ matrix.environment }}-${{ matrix.region }}-${{ github.event.pull_request.number }}
+      group: plan-${{ matrix.environment }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     permissions:
       contents: read
       id-token: write
     defaults:
       run:
-        working-directory: examples/multi-account
+        working-directory: examples/cluster1/${{ matrix.environment }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -80,13 +75,14 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ matrix.region }}
-      - run: terraform init -backend-config=env/${{ matrix.environment }}-${{ matrix.region }}.s3.tfbackend
-      - run: terraform plan -lock=false -no-color -var-file=env/${{ matrix.environment }}-${{ matrix.region }}.tfvars -out=tfplan
+          # Region for the STS call only; each provider block in the root sets its own region.
+          aws-region: us-east-1
+      - run: terraform init
+      - run: terraform plan -lock=false -no-color -out=tfplan
       - name: Publish plan to job summary
         run: |
           {
-            echo "### Plan: ${{ matrix.environment }} ${{ matrix.region }}"
+            echo "### Plan: ${{ matrix.environment }}"
             echo '```'
             terraform show -no-color tfplan
             echo '```'
@@ -97,27 +93,22 @@ jobs:
     needs: [fmt, validate]
     runs-on: ubuntu-latest
     strategy:
-      # One stack at a time, in this order; a failure stops promotion.
+      # One environment at a time, in this order; a failure stops promotion.
       max-parallel: 1
       fail-fast: true
       matrix:
-        include:
-          - { environment: dev, region: us-east-1 }
-          - { environment: staging, region: us-east-1 }
-          - { environment: staging, region: us-west-1 }
-          - { environment: prod, region: us-east-1 }
-          - { environment: prod, region: us-west-1 }
+        environment: [dev, stg, prd]
     # Protected environment: restricted to main, optional required reviewers, holds the apply role.
     environment: ${{ matrix.environment }}
     concurrency:
-      group: apply-${{ matrix.environment }}-${{ matrix.region }}
+      group: apply-${{ matrix.environment }}
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
     defaults:
       run:
-        working-directory: examples/multi-account
+        working-directory: examples/cluster1/${{ matrix.environment }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -127,6 +118,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ matrix.region }}
-      - run: terraform init -backend-config=env/${{ matrix.environment }}-${{ matrix.region }}.s3.tfbackend
-      - run: terraform apply -auto-approve -var-file=env/${{ matrix.environment }}-${{ matrix.region }}.tfvars
+          # Region for the STS call only; each provider block in the root sets its own region.
+          aws-region: us-east-1
+      - run: terraform init
+      - run: terraform apply -auto-approve

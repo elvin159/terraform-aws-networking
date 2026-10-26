@@ -1,5 +1,0 @@
-bucket       = "example-terraform-state-prod"
-key          = "networking/us-west-1/terraform.tfstate"
-region       = "us-east-1"
-encrypt      = true
-use_lockfile = true
